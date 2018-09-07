@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.location.Address;
 import android.location.Geocoder;
@@ -12,12 +13,18 @@ import android.location.Location;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.design.widget.BottomSheetBehavior;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
+import android.support.v4.content.ContextCompat;
+import android.support.v4.widget.ImageViewCompat;
+import android.util.Pair;
 import android.view.KeyEvent;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AutoCompleteTextView;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -47,6 +54,7 @@ import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.LatLngBounds;
+import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.android.gms.tasks.OnCompleteListener;
@@ -70,9 +78,29 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     @BindView(R.id.input_search)
     AutoCompleteTextView mSearchText;
+    @BindView(R.id.tv_origin)
+    TextView tvOrigin;
+    @BindView(R.id.tv_destination)
+    TextView tvDestination;
+    @BindView(R.id.tv_duration)
+    TextView tvDuration;
+    @BindView(R.id.tv_origin_desc)
+    TextView tvOriginDesc;
+    @BindView(R.id.tv_destination_desc)
+    TextView tvDestinationDesc;
+
+    @BindView(R.id.iv_transportDriving)
+    ImageView ivDriving;
+    @BindView(R.id.iv_transportTransit)
+    ImageView ivTransit;
+    @BindView(R.id.iv_transportCycling)
+    ImageView ivCycling;
+    @BindView(R.id.iv_transportWalking)
+    ImageView ivWalking;
 
     private PlaceAutoCompleteAdapter mPlaceAutoCompleteAdapter;
     private GoogleApiClient mGoogleApiClient;
+    Geocoder geocoder;
     private static final LatLngBounds LAT_LNG_BOUNDS = new LatLngBounds(
             new LatLng(-40, -168), new LatLng(71, 136));
     final static float default_zoom = 15f;
@@ -81,6 +109,12 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     Boolean gpsUsable = false;
     FusedLocationProviderClient mFusedLocationClient;
     LatLng origin, destination;
+
+    private LinearLayout layout;
+    private BottomSheetBehavior bsb;
+
+    Marker marker;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -92,26 +126,51 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         mapFragment.getMapAsync(this);
         ButterKnife.bind(this);
 
+        layout = findViewById(R.id.bottom_sheet);
+        bsb = BottomSheetBehavior.from(layout);
+        bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
+
         if (permission)
             mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
     }
 
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == PLACE_AUTOCOMPLETE_REQUEST_CODE) {
-            if (resultCode == RESULT_OK) {
-                Place place = PlaceAutocomplete.getPlace(this, data);
-                mMap.clear();
-                mMap.addMarker(new MarkerOptions().position(place.getLatLng()).title(place.getName().toString()).snippet(Objects.requireNonNull(place.getAddress()).toString()));
-                mMap.moveCamera(CameraUpdateFactory.newLatLng(place.getLatLng()));
-                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(place.getLatLng(), 12.0f));
-            }
-        }
-    }
-
     @OnClick(R.id.ic_magnify)
     void search() {
+        geoLocate();
+    }
+
+
+    void changeIconColor(ImageView imageView){
+        ImageViewCompat.setImageTintList(ivDriving, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivTransit, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivCycling, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivWalking, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(imageView, ColorStateList.valueOf(ContextCompat.getColor(this, R.color.colorPrimaryDark)));
+    }
+
+    @OnClick(R.id.iv_transportDriving)
+    void clickedIvDriving(){
+        changeIconColor(ivDriving);
+        transportMode = TransportMode.DRIVING;
+        geoLocate();
+    }
+    @OnClick(R.id.iv_transportTransit)
+    void clickedIvTransit(){
+        changeIconColor(ivTransit);
+        transportMode = TransportMode.TRANSIT;
+        geoLocate();
+    }
+    @OnClick(R.id.iv_transportCycling)
+    void clickedIvCycling(){
+        changeIconColor(ivCycling);
+        transportMode = TransportMode.BICYCLING;
+        geoLocate();
+    }
+    @OnClick(R.id.iv_transportWalking)
+    void clickedIvWalking(){
+        changeIconColor(ivWalking);
+        transportMode = TransportMode.WALKING;
         geoLocate();
     }
 
@@ -147,6 +206,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 .enableAutoManage(this, this)
                 .build();
         mGoogleApiClient.connect();
+
+        geocoder = new Geocoder(MapsActivity.this);
 
         mPlaceAutoCompleteAdapter = new PlaceAutoCompleteAdapter(this, mGoogleApiClient,
                 LAT_LNG_BOUNDS, null);
@@ -201,17 +262,10 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 } catch (ApiException exception) {
                     switch (exception.getStatusCode()) {
                         case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
-                            // Location settings are not satisfied. But could be fixed by showing the
-                            // user a dialog.
                             try {
-                                // Cast to a resolvable exception.
                                 ResolvableApiException resolvable = (ResolvableApiException) exception;
-                                // Show the dialog by calling startResolutionForResult(),
-                                // and check the result in onActivityResult().
                                 resolvable.startResolutionForResult(MapsActivity.this, 1000);
-                            } catch (IntentSender.SendIntentException | ClassCastException e) {
-                                // Ignore the error.
-                            }
+                            } catch (IntentSender.SendIntentException | ClassCastException ignored) {}
                             break;
                         case LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE:
                             break;
@@ -226,17 +280,15 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @SuppressLint("MissingPermission")
     private void geoLocate() {
         String searchString = mSearchText.getText().toString();
-        Geocoder geocoder = new Geocoder(MapsActivity.this);
         List<Address> list = new ArrayList<>();
         try {
             list = geocoder.getFromLocationName(searchString, 1);
-        } catch (IOException ignored) {
-        }
+        } catch (IOException ignored) { }
 
         if (list.size() > 0) {
-            Address address = list.get(0);
+            final Address address = list.get(0);
             moveCamera(new LatLng(address.getLatitude(), address.getLongitude()), default_zoom,
-                    address.getAddressLine(0));
+                    address.getFeatureName(), address.getAddressLine(0));
 
             destination = new LatLng(address.getLatitude(), address.getLongitude());
             if (permission) {
@@ -254,7 +306,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
-    void getDirection(LatLng origin, LatLng destination) {
+    void getDirection(final LatLng origin, final LatLng destination) {
         GoogleDirection.withServerKey(getString(R.string.google_maps_key))
                 .from(origin)
                 .to(destination)
@@ -264,40 +316,82 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                     public void onDirectionSuccess(Direction direction, String rawBody) {
                         if (direction.isOK()) {
                             List<Leg> legs = direction.getRouteList().get(0).getLegList();
-                            for (int i = 0; i<legs.size(); i++){
-                                int color = (i==0) ? Color.RED : Color.GRAY;
-                                ArrayList<LatLng> pointList = legs.get(i).getDirectionPoint();
-                                PolylineOptions polylineOptions = DirectionConverter.createPolyline(MapsActivity.this, pointList, 5, color);
-                                mMap.addPolyline(polylineOptions);
+                            if (legs.size() > 0) {
+                                for (int i = 0; i < legs.size(); i++) {
+                                    int color = (i == 0) ? Color.RED : Color.GRAY;
+                                    ArrayList<LatLng> pointList = legs.get(i).getDirectionPoint();
+                                    PolylineOptions polylineOptions = DirectionConverter.createPolyline(MapsActivity.this, pointList, 5, color);
+                                    mMap.addPolyline(polylineOptions);
+                                }
+                                String duration = legs.get(0).getDuration().getText();
+                                setBottomSheet(origin, destination, duration);
                             }
                         } else {
                             Toast.makeText(MapsActivity.this, direction.getErrorMessage(), Toast.LENGTH_SHORT).show();
+                            setBottomSheet(origin, destination, "-");
                         }
                     }
 
                     @Override
                     public void onDirectionFailure(Throwable t) {
                         Toast.makeText(MapsActivity.this, "Failure Directing", Toast.LENGTH_SHORT).show();
+                        setBottomSheet(origin, destination, "-");
                     }
                 });
     }
 
-    private void moveCamera(LatLng latLng, float zoom, String title) {
-        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLng, zoom));
+    private Pair<String,String> getLocationNameAndDesc(LatLng latLng) {
+        List<Address> list = new ArrayList<>();
+        try {
+            list = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1);
+        } catch (IOException ignored) {}
 
-        if (!title.equals("My Location")) {
-            MarkerOptions options = new MarkerOptions()
-                    .position(latLng)
-                    .title(title);
-            mMap.addMarker(options);
+        if (list.size() > 0){
+            String name = list.get(0).getFeatureName();
+            String address = list.get(0).getAddressLine(0);
+            return new Pair<>(name,address);
+        }else{
+            return new Pair<>("","");
         }
+    }
+
+    @SuppressLint("SetTextI18n")
+    private void setBottomSheet(LatLng origin, LatLng destination, String duration) {
+        Pair<String,String> from = getLocationNameAndDesc(origin);
+        Pair<String,String> to = getLocationNameAndDesc(destination);
+
+        tvOrigin.setText("From : " + from.first);
+        tvDestination.setText("To : " + to.first);
+        tvOriginDesc.setText(from.second);
+        tvDestinationDesc.setText(to.second);
+        tvDuration.setText(duration);
+        bsb.setState(BottomSheetBehavior.STATE_COLLAPSED);
+    }
+
+    private void moveCamera(LatLng latLng, float zoom, String title, String desc) {
+        mMap.clear();
+        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLng, zoom));
+        MarkerOptions options = new MarkerOptions()
+                .position(latLng)
+                .title(title)
+                .snippet(desc);
+        marker = mMap.addMarker(options);
 
         hideSoftKeyboard();
     }
 
-    private void hideSoftKeyboard() {
-        this.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
-    }
+//    @Override
+//    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+//        if (requestCode == PLACE_AUTOCOMPLETE_REQUEST_CODE) {
+//            if (resultCode == RESULT_OK) {
+//                Place place = PlaceAutocomplete.getPlace(this, data);
+//                mMap.clear();
+//                marker = mMap.addMarker(new MarkerOptions().position(place.getLatLng()).title(place.getName().toString()).snippet(Objects.requireNonNull(place.getAddress()).toString()));
+//                mMap.moveCamera(CameraUpdateFactory.newLatLng(place.getLatLng()));
+//                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(place.getLatLng(), 12.0f));
+//            }
+//        }
+//    }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
@@ -310,6 +404,10 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
+    private void hideSoftKeyboard() {
+        this.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+    }
+
     @Override
     public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
 
@@ -319,5 +417,17 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     protected void onDestroy() {
         mGoogleApiClient.disconnect();
         super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (bsb.getState() != BottomSheetBehavior.STATE_HIDDEN){
+            bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
+        } else if (marker!=null){
+            // marker.remove() tidak berfungsi
+            mMap.clear();
+            marker = null;
+        } else
+            super.onBackPressed();
     }
 }
