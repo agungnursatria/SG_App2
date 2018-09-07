@@ -2,7 +2,6 @@ package com.anb.sg_app2;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.Intent;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -10,14 +9,17 @@ import android.graphics.Color;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
+import android.location.LocationListener;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.design.widget.BottomSheetBehavior;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.widget.ImageViewCompat;
+import android.util.Log;
 import android.util.Pair;
 import android.view.KeyEvent;
 import android.view.WindowManager;
@@ -45,9 +47,7 @@ import com.google.android.gms.location.LocationSettingsRequest;
 import com.google.android.gms.location.LocationSettingsResponse;
 import com.google.android.gms.location.LocationSettingsStates;
 import com.google.android.gms.location.LocationSettingsStatusCodes;
-import com.google.android.gms.location.places.Place;
 import com.google.android.gms.location.places.Places;
-import com.google.android.gms.location.places.ui.PlaceAutocomplete;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
@@ -64,16 +64,22 @@ import com.google.android.gms.tasks.Task;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
 import butterknife.OnClick;
 
-public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleApiClient.OnConnectionFailedListener {
+public class MapsActivity
+        extends
+        FragmentActivity
+        implements
+        OnMapReadyCallback,
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener,
+        LocationListener {
 
+    final String TAG = "MapsActivity";
     private GoogleMap mMap;
-    int PLACE_AUTOCOMPLETE_REQUEST_CODE = 1;
     String transportMode = TransportMode.DRIVING;
 
     @BindView(R.id.input_search)
@@ -88,7 +94,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     TextView tvOriginDesc;
     @BindView(R.id.tv_destination_desc)
     TextView tvDestinationDesc;
-
     @BindView(R.id.iv_transportDriving)
     ImageView ivDriving;
     @BindView(R.id.iv_transportTransit)
@@ -98,7 +103,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     @BindView(R.id.iv_transportWalking)
     ImageView ivWalking;
 
-    private PlaceAutoCompleteAdapter mPlaceAutoCompleteAdapter;
     private GoogleApiClient mGoogleApiClient;
     Geocoder geocoder;
     private static final LatLngBounds LAT_LNG_BOUNDS = new LatLngBounds(
@@ -110,9 +114,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     FusedLocationProviderClient mFusedLocationClient;
     LatLng origin, destination;
 
-    private LinearLayout layout;
     private BottomSheetBehavior bsb;
-
     Marker marker;
 
 
@@ -120,58 +122,21 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_maps);
-        requestPermission();
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
-        mapFragment.getMapAsync(this);
-        ButterKnife.bind(this);
 
-        layout = findViewById(R.id.bottom_sheet);
+        ButterKnife.bind(this);
+        requestPermission();
+        init();
+
+        mapFragment.getMapAsync(this);
+
+        LinearLayout layout = findViewById(R.id.bottom_sheet);
         bsb = BottomSheetBehavior.from(layout);
         bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
 
         if (permission)
             mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
-    }
-
-
-    @OnClick(R.id.ic_magnify)
-    void search() {
-        geoLocate();
-    }
-
-
-    void changeIconColor(ImageView imageView){
-        ImageViewCompat.setImageTintList(ivDriving, ColorStateList.valueOf(Color.GRAY));
-        ImageViewCompat.setImageTintList(ivTransit, ColorStateList.valueOf(Color.GRAY));
-        ImageViewCompat.setImageTintList(ivCycling, ColorStateList.valueOf(Color.GRAY));
-        ImageViewCompat.setImageTintList(ivWalking, ColorStateList.valueOf(Color.GRAY));
-        ImageViewCompat.setImageTintList(imageView, ColorStateList.valueOf(ContextCompat.getColor(this, R.color.colorPrimaryDark)));
-    }
-
-    @OnClick(R.id.iv_transportDriving)
-    void clickedIvDriving(){
-        changeIconColor(ivDriving);
-        transportMode = TransportMode.DRIVING;
-        geoLocate();
-    }
-    @OnClick(R.id.iv_transportTransit)
-    void clickedIvTransit(){
-        changeIconColor(ivTransit);
-        transportMode = TransportMode.TRANSIT;
-        geoLocate();
-    }
-    @OnClick(R.id.iv_transportCycling)
-    void clickedIvCycling(){
-        changeIconColor(ivCycling);
-        transportMode = TransportMode.BICYCLING;
-        geoLocate();
-    }
-    @OnClick(R.id.iv_transportWalking)
-    void clickedIvWalking(){
-        changeIconColor(ivWalking);
-        transportMode = TransportMode.WALKING;
-        geoLocate();
     }
 
     @SuppressLint("MissingPermission")
@@ -181,16 +146,78 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         if (permission) {
             mMap.setMyLocationEnabled(true);
-            init();
+            mMap.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
+                @Override
+                public void onMapClick(LatLng latLng) {
+                    destination = latLng;
+                    List<Address> list = new ArrayList<>();
+                    try {
+                        list = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1);
+                    } catch (IOException ignored) {
+                    }
+                    if (list.size() > 0) {
+                        final Address address = list.get(0);
+                        moveCamera(destination, default_zoom, address.getFeatureName(), address.getAddressLine(0));
+                    }
+                    if (origin != null) {
+                        getDirection(origin, destination);
+                    }
+                }
+            });
         }
+    }
+
+    void changeIconColor(ImageView imageView) {
+        ImageViewCompat.setImageTintList(ivDriving, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivTransit, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivCycling, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(ivWalking, ColorStateList.valueOf(Color.GRAY));
+        ImageViewCompat.setImageTintList(imageView, ColorStateList.valueOf(ContextCompat.getColor(this, R.color.colorPrimaryDark)));
+    }
+
+    @OnClick(R.id.ic_magnify)
+    void search() {
+        geoLocate();
+    }
+
+    @OnClick(R.id.iv_transportDriving)
+    void clickedIvDriving() {
+        changeIconColor(ivDriving);
+        transportMode = TransportMode.DRIVING;
+        geoLocate();
+    }
+
+    @OnClick(R.id.iv_transportTransit)
+    void clickedIvTransit() {
+        changeIconColor(ivTransit);
+        transportMode = TransportMode.TRANSIT;
+        geoLocate();
+    }
+
+    @OnClick(R.id.iv_transportCycling)
+    void clickedIvCycling() {
+        changeIconColor(ivCycling);
+        transportMode = TransportMode.BICYCLING;
+        geoLocate();
+    }
+
+    @OnClick(R.id.iv_transportWalking)
+    void clickedIvWalking() {
+        changeIconColor(ivWalking);
+        transportMode = TransportMode.WALKING;
+        geoLocate();
     }
 
     public void requestPermission() {
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP_MR1) {
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED) {
+
                 ActivityCompat.requestPermissions(MapsActivity.this,
-                        new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
+                        new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                                Manifest.permission.INTERNET}, 1);
             }
         } else {
             permission = true;
@@ -203,13 +230,14 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 .addApi(Places.GEO_DATA_API)
                 .addApi(Places.PLACE_DETECTION_API)
                 .addApi(LocationServices.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
                 .enableAutoManage(this, this)
                 .build();
-        mGoogleApiClient.connect();
 
         geocoder = new Geocoder(MapsActivity.this);
 
-        mPlaceAutoCompleteAdapter = new PlaceAutoCompleteAdapter(this, mGoogleApiClient,
+        PlaceAutoCompleteAdapter mPlaceAutoCompleteAdapter = new PlaceAutoCompleteAdapter(this, mGoogleApiClient,
                 LAT_LNG_BOUNDS, null);
         mSearchText.setAdapter(mPlaceAutoCompleteAdapter);
 
@@ -227,53 +255,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             }
         });
 
-        // Turn on GPS with high accuracy
-        LocationRequest locationRequest = LocationRequest.create();
-        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
-        locationRequest.setInterval(30 * 1000);
-        locationRequest.setFastestInterval(5 * 1000);
-        LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest);
-        builder.setAlwaysShow(true);
-
-        Task<LocationSettingsResponse> task =
-                LocationServices.getSettingsClient(this).checkLocationSettings(builder.build());
-
-        task.addOnCompleteListener(new OnCompleteListener<LocationSettingsResponse>() {
-            @SuppressLint("MissingPermission")
-            @Override
-            public void onComplete(@NonNull Task<LocationSettingsResponse> task) {
-                try {
-                    LocationSettingsResponse response = task.getResult(ApiException.class);
-                    LocationSettingsStates state = response.getLocationSettingsStates();
-                    if (state.isGpsPresent() && state.isGpsUsable()) {
-                        gpsUsable = true;
-                        if (permission) {
-                            mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
-                                @Override
-                                public void onSuccess(Location location) {
-                                    if (location != null) {
-                                        origin = new LatLng(location.getLatitude(), location.getLongitude());
-                                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(origin, 18f));
-                                    }
-                                }
-                            });
-                        }
-                    }
-                } catch (ApiException exception) {
-                    switch (exception.getStatusCode()) {
-                        case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
-                            try {
-                                ResolvableApiException resolvable = (ResolvableApiException) exception;
-                                resolvable.startResolutionForResult(MapsActivity.this, 1000);
-                            } catch (IntentSender.SendIntentException | ClassCastException ignored) {}
-                            break;
-                        case LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE:
-                            break;
-                    }
-                }
-            }
-        });
-
         hideSoftKeyboard();
     }
 
@@ -283,7 +264,8 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         List<Address> list = new ArrayList<>();
         try {
             list = geocoder.getFromLocationName(searchString, 1);
-        } catch (IOException ignored) { }
+        } catch (IOException ignored) {
+        }
 
         if (list.size() > 0) {
             final Address address = list.get(0);
@@ -340,25 +322,26 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
                 });
     }
 
-    private Pair<String,String> getLocationNameAndDesc(LatLng latLng) {
+    private Pair<String, String> getLocationNameAndDesc(LatLng latLng) {
         List<Address> list = new ArrayList<>();
         try {
             list = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1);
-        } catch (IOException ignored) {}
+        } catch (IOException ignored) {
+        }
 
-        if (list.size() > 0){
+        if (list.size() > 0) {
             String name = list.get(0).getFeatureName();
             String address = list.get(0).getAddressLine(0);
-            return new Pair<>(name,address);
-        }else{
-            return new Pair<>("","");
+            return new Pair<>(name, address);
+        } else {
+            return new Pair<>("", "");
         }
     }
 
     @SuppressLint("SetTextI18n")
     private void setBottomSheet(LatLng origin, LatLng destination, String duration) {
-        Pair<String,String> from = getLocationNameAndDesc(origin);
-        Pair<String,String> to = getLocationNameAndDesc(destination);
+        Pair<String, String> from = getLocationNameAndDesc(origin);
+        Pair<String, String> to = getLocationNameAndDesc(destination);
 
         tvOrigin.setText("From : " + from.first);
         tvDestination.setText("To : " + to.first);
@@ -370,7 +353,7 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     private void moveCamera(LatLng latLng, float zoom, String title, String desc) {
         mMap.clear();
-        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(latLng, zoom));
+        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, zoom));
         MarkerOptions options = new MarkerOptions()
                 .position(latLng)
                 .title(title)
@@ -379,19 +362,6 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
         hideSoftKeyboard();
     }
-
-//    @Override
-//    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-//        if (requestCode == PLACE_AUTOCOMPLETE_REQUEST_CODE) {
-//            if (resultCode == RESULT_OK) {
-//                Place place = PlaceAutocomplete.getPlace(this, data);
-//                mMap.clear();
-//                marker = mMap.addMarker(new MarkerOptions().position(place.getLatLng()).title(place.getName().toString()).snippet(Objects.requireNonNull(place.getAddress()).toString()));
-//                mMap.moveCamera(CameraUpdateFactory.newLatLng(place.getLatLng()));
-//                mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(place.getLatLng(), 12.0f));
-//            }
-//        }
-//    }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
@@ -409,25 +379,113 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     }
 
     @Override
-    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-
-    }
-
-    @Override
-    protected void onDestroy() {
-        mGoogleApiClient.disconnect();
-        super.onDestroy();
-    }
-
-    @Override
     public void onBackPressed() {
-        if (bsb.getState() != BottomSheetBehavior.STATE_HIDDEN){
+        if (bsb.getState() != BottomSheetBehavior.STATE_HIDDEN) {
             bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
-        } else if (marker!=null){
+        } else if (marker != null) {
             // marker.remove() tidak berfungsi
             mMap.clear();
             marker = null;
         } else
             super.onBackPressed();
+    }
+
+    @Override
+    public void onLocationChanged(Location location) {
+        origin = new LatLng(location.getLatitude(), location.getLongitude());
+    }
+
+    @Override
+    public void onStatusChanged(String provider, int status, Bundle extras) {
+
+    }
+
+    @Override
+    public void onProviderEnabled(String provider) {
+
+    }
+
+    @Override
+    public void onProviderDisabled(String provider) {
+
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        mGoogleApiClient.connect();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        mGoogleApiClient.disconnect();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mGoogleApiClient.connect();
+    }
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        // Turn on GPS with high accuracy
+        LocationRequest locationRequest = LocationRequest.create();
+        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+        locationRequest.setInterval(30 * 1000);
+        locationRequest.setFastestInterval(5 * 1000);
+        LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder().addLocationRequest(locationRequest);
+        builder.setAlwaysShow(true);
+
+        Task<LocationSettingsResponse> task =
+                LocationServices.getSettingsClient(this).checkLocationSettings(builder.build());
+
+        task.addOnCompleteListener(new OnCompleteListener<LocationSettingsResponse>() {
+            @SuppressLint("MissingPermission")
+            @Override
+            public void onComplete(@NonNull Task<LocationSettingsResponse> task) {
+                try {
+                    LocationSettingsResponse response = task.getResult(ApiException.class);
+                    LocationSettingsStates state = response.getLocationSettingsStates();
+                    if (state.isGpsPresent() && state.isGpsUsable()) {
+                        gpsUsable = true;
+                        if (permission) {
+                            mFusedLocationClient.getLastLocation().addOnSuccessListener(new OnSuccessListener<Location>() {
+                                @Override
+                                public void onSuccess(Location location) {
+                                    if (location != null) {
+                                        origin = new LatLng(location.getLatitude(), location.getLongitude());
+                                        mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(origin, 18f));
+                                    }
+                                }
+                            });
+                        }
+                    }
+                } catch (ApiException exception) {
+                    switch (exception.getStatusCode()) {
+                        case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
+                            try {
+                                ResolvableApiException resolvable = (ResolvableApiException) exception;
+                                resolvable.startResolutionForResult(MapsActivity.this, 1000);
+                            } catch (IntentSender.SendIntentException | ClassCastException ignored) {
+                            }
+                            break;
+                        case LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE:
+                            break;
+                    }
+                }
+            }
+        });
+    }
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+        Log.i(TAG, "connection failed");
+    }
+
+    @Override
+    public void onConnectionSuspended(int i) {
+        Log.i(TAG, "Connection suspended");
     }
 }
