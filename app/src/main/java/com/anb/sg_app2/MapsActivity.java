@@ -102,6 +102,8 @@ public class MapsActivity
     ImageView ivCycling;
     @BindView(R.id.iv_transportWalking)
     ImageView ivWalking;
+    @BindView(R.id.bottom_sheet)
+    LinearLayout bottomSheet;
 
     private GoogleApiClient mGoogleApiClient;
     Geocoder geocoder;
@@ -129,42 +131,32 @@ public class MapsActivity
         requestPermission();
         init();
 
-        mapFragment.getMapAsync(this);
-
-        LinearLayout layout = findViewById(R.id.bottom_sheet);
-        bsb = BottomSheetBehavior.from(layout);
-        bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
-
         if (permission)
             mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+
+        mapFragment.getMapAsync(this);
+
+        bsb = BottomSheetBehavior.from(bottomSheet);
+        bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
     }
 
     @SuppressLint("MissingPermission")
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
+        if (permission)
+            featureLocationMap();
+    }
 
-        if (permission) {
-            mMap.setMyLocationEnabled(true);
-            mMap.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
-                @Override
-                public void onMapClick(LatLng latLng) {
-                    destination = latLng;
-                    List<Address> list = new ArrayList<>();
-                    try {
-                        list = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1);
-                    } catch (IOException ignored) {
-                    }
-                    if (list.size() > 0) {
-                        final Address address = list.get(0);
-                        moveCamera(destination, default_zoom, address.getFeatureName(), address.getAddressLine(0));
-                    }
-                    if (origin != null) {
-                        getDirection(origin, destination);
-                    }
-                }
-            });
-        }
+    @SuppressLint("MissingPermission")
+    void featureLocationMap(){
+        mMap.setMyLocationEnabled(true);
+        mMap.setOnMapClickListener(new GoogleMap.OnMapClickListener() {
+            @Override
+            public void onMapClick(LatLng latLng) {
+                geoLocate(latLng);
+            }
+        });
     }
 
     void changeIconColor(ImageView imageView) {
@@ -177,47 +169,45 @@ public class MapsActivity
 
     @OnClick(R.id.ic_magnify)
     void search() {
-        geoLocate();
+        geoLocate(null);
     }
 
     @OnClick(R.id.iv_transportDriving)
     void clickedIvDriving() {
         changeIconColor(ivDriving);
         transportMode = TransportMode.DRIVING;
-        geoLocate();
+        geoLocate(null);
     }
 
     @OnClick(R.id.iv_transportTransit)
     void clickedIvTransit() {
         changeIconColor(ivTransit);
         transportMode = TransportMode.TRANSIT;
-        geoLocate();
+        geoLocate(null);
     }
 
     @OnClick(R.id.iv_transportCycling)
     void clickedIvCycling() {
         changeIconColor(ivCycling);
         transportMode = TransportMode.BICYCLING;
-        geoLocate();
+        geoLocate(null);
     }
 
     @OnClick(R.id.iv_transportWalking)
     void clickedIvWalking() {
         changeIconColor(ivWalking);
         transportMode = TransportMode.WALKING;
-        geoLocate();
+        geoLocate(null);
     }
 
     public void requestPermission() {
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP_MR1) {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED) {
-
+            permission = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+            if (!permission) {
                 ActivityCompat.requestPermissions(MapsActivity.this,
                         new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION,
-                                Manifest.permission.INTERNET}, 1);
+                                Manifest.permission.ACCESS_COARSE_LOCATION}, 1);
             }
         } else {
             permission = true;
@@ -249,7 +239,7 @@ public class MapsActivity
                         || keyEvent.getAction() == KeyEvent.ACTION_DOWN
                         || keyEvent.getAction() == KeyEvent.KEYCODE_ENTER) {
 
-                    geoLocate();
+                    geoLocate(null);
                 }
                 return false;
             }
@@ -259,12 +249,20 @@ public class MapsActivity
     }
 
     @SuppressLint("MissingPermission")
-    private void geoLocate() {
-        String searchString = mSearchText.getText().toString();
+    private void geoLocate(@Nullable LatLng latLng) {
         List<Address> list = new ArrayList<>();
-        try {
-            list = geocoder.getFromLocationName(searchString, 1);
-        } catch (IOException ignored) {
+        if (latLng != null){
+            destination = latLng;
+            try {
+                // Reverse Geocode
+                list = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1);
+            } catch (IOException ignored) {}
+        } else {
+            String searchString = mSearchText.getText().toString();
+            try {
+                // Geocode
+                list = geocoder.getFromLocationName(searchString, 1);
+            } catch (IOException ignored) {}
         }
 
         if (list.size() > 0) {
@@ -367,7 +365,9 @@ public class MapsActivity
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         switch (requestCode) {
             case 1:
-                permission = grantResults[0] == PackageManager.PERMISSION_GRANTED;
+                permission = (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED);
+                mFusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+                featureLocationMap();
                 break;
             default:
                 super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -402,12 +402,12 @@ public class MapsActivity
 
     @Override
     public void onProviderEnabled(String provider) {
-
+        Log.i(TAG, "provider enabled");
     }
 
     @Override
     public void onProviderDisabled(String provider) {
-
+        Log.i(TAG, "provider disabled");
     }
 
     @Override
