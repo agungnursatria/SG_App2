@@ -383,7 +383,6 @@ public class MapsActivity
         if (bsb.getState() != BottomSheetBehavior.STATE_HIDDEN) {
             bsb.setState(BottomSheetBehavior.STATE_HIDDEN);
         } else if (marker != null) {
-            // marker.remove() tidak berfungsi
             mMap.clear();
             marker = null;
         } else
